@@ -47,7 +47,7 @@ description = """The Apache Spark adapter plugin for dbt"""
 odbc_extras = ["pyodbc~=5.1.0"]
 pyhive_extras = [
     "PyHive[hive_pure_sasl]~=0.7.0",
-    "thrift>=0.11.0,<0.17.0",
+    "thrift==0.20.0",
 ]
 session_extras = ["pyspark>=3.0.0,<4.0.0"]
 all_extras = odbc_extras + pyhive_extras + session_extras
@@ -69,6 +69,8 @@ setup(
         "dbt-adapters>=1.7,<2.0",
         # add dbt-core to ensure backwards compatibility of installation, this is not a functional dependency
         "dbt-core>=1.8.0",
+        "alibabacloud_tea_openapi >= 0.3.7",
+        "alibabacloud_emr_serverless_spark20230808 >= 1.0.0"
     ],
     extras_require={
         "ODBC": odbc_extras,

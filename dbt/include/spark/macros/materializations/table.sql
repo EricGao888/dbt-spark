@@ -1,4 +1,5 @@
 {% materialization table, adapter = 'spark', supported_languages=['sql', 'python'] %}
+
   {%- set language = model['language'] -%}
   {%- set identifier = model['alias'] -%}
   {%- set grant_config = config.get('grants') -%}
@@ -37,6 +38,7 @@
   {% set should_revoke = should_revoke(old_relation, full_refresh_mode=True) %}
   {% do apply_grants(target_relation, grant_config, should_revoke) %}
 
+  {{ log("[debug111] debug from macros", info=True) }}
   {% do persist_docs(target_relation, model) %}
 
   {% do persist_constraints(target_relation, model) %}

@@ -1,5 +1,10 @@
 from contextlib import contextmanager
 
+from alibabacloud_emr_serverless_spark20230808.client import Client
+from alibabacloud_emr_serverless_spark20230808.models import Tag, JobDriverSparkSubmit, JobDriver, StartJobRunRequest, \
+    GetJobRunRequest
+from alibabacloud_tea_openapi.models import Config
+from alibabacloud_tea_util import models as util_models
 from dbt.adapters.contracts.connection import (
     AdapterResponse,
     ConnectionState,
@@ -84,6 +89,10 @@ class SparkCredentials(Credentials):
     use_ssl: bool = False
     server_side_parameters: Dict[str, str] = field(default_factory=dict)
     retry_all: bool = False
+    ak: str = None
+    sk: str = None
+    region: str = "cn-hangzhou"
+    workspace_id: str = None
 
     @classmethod
     def __pre_deserialize__(cls, data: Any) -> Any:
@@ -217,12 +226,16 @@ class PyhiveConnectionWrapper(SparkConnectionWrapper):
     handle: "pyodbc.Connection"
     _cursor: "Optional[pyodbc.Cursor]"
 
-    def __init__(self, handle: "pyodbc.Connection") -> None:
-        self.handle = handle
+    # def __init__(self, handle: "pyodbc.Connection") -> None:
+    #     # self.handle = handle
+    #     self._cursor = None
+
+    def __init__(self, connection) -> None:
+        self.connection = connection
         self._cursor = None
 
     def cursor(self) -> "PyhiveConnectionWrapper":
-        self._cursor = self.handle.cursor()
+        # self._cursor = self.handle.cursor()
         return self
 
     def cancel(self) -> None:
@@ -235,6 +248,7 @@ class PyhiveConnectionWrapper(SparkConnectionWrapper):
                 logger.debug("Exception while cancelling query: {}".format(exc))
 
     def close(self) -> None:
+        return
         if self._cursor:
             # Handle bad response in the pyhive lib when
             # the connection is cancelled
@@ -248,10 +262,17 @@ class PyhiveConnectionWrapper(SparkConnectionWrapper):
         logger.debug("NotImplemented: rollback")
 
     def fetchall(self) -> List["pyodbc.Row"]:
-        assert self._cursor, "Cursor not available"
-        return self._cursor.fetchall()
+        return []
+        # assert self._cursor, "Cursor not available"
+        # return self._cursor.fetchall()
 
     def execute(self, sql: str, bindings: Optional[List[Any]] = None) -> None:
+        logger.info("[debug111] sql - {}", sql)
+        logger.info("[debug111] submit sql to ss...")
+        logger.info("[debug111] bindings - {}", bindings)
+        ss_execute(sql, self.connection.credentials)
+        return
+
         if sql.strip().endswith(";"):
             sql = sql.strip()[:-1]
 
@@ -322,9 +343,9 @@ class PyhiveConnectionWrapper(SparkConnectionWrapper):
     ) -> Sequence[
         Tuple[str, Any, Optional[int], Optional[int], Optional[int], Optional[int], bool]
     ]:
-        assert self._cursor, "Cursor not available"
-        return self._cursor.description
-
+        # assert self._cursor, "Cursor not available"
+        # return self._cursor.description
+        return []
 
 class PyodbcConnectionWrapper(PyhiveConnectionWrapper):
     def execute(self, sql: str, bindings: Optional[List[Any]] = None) -> None:
@@ -401,6 +422,12 @@ class SparkConnectionManager(SQLConnectionManager):
 
     @classmethod
     def open(cls, connection: Connection) -> Connection:
+        logger.info("[debug111] connection info - {}", connection)
+        connection.state = ConnectionState.OPEN
+        # connection.handle = SSConnectionWrapper(None)
+        connection.handle = PyhiveConnectionWrapper(connection)
+        return connection
+
         if connection.state == ConnectionState.OPEN:
             logger.debug("Connection is already open, skipping open.")
             return connection
@@ -440,9 +467,10 @@ class SparkConnectionManager(SQLConnectionManager):
                     )
                     handle = PyhiveConnectionWrapper(conn)
                 elif creds.method == SparkConnectionMethod.THRIFT:
+                    logger.info("[debug111] eric says hi 123")
                     cls.validate_creds(creds, ["host", "port", "user", "schema"])
-
                     if creds.use_ssl:
+                        logger.info("[debug111] use ssl")
                         transport = build_ssl_transport(
                             host=creds.host,
                             port=creds.port,
@@ -456,15 +484,10 @@ class SparkConnectionManager(SQLConnectionManager):
                             configuration=creds.server_side_parameters,
                         )
                     else:
-                        conn = hive.connect(
-                            host=creds.host,
-                            port=creds.port,
-                            username=creds.user,
-                            auth=creds.auth,
-                            kerberos_service_name=creds.kerberos_service_name,
-                            password=creds.password,
-                            configuration=creds.server_side_parameters,
-                        )  # noqa
+                        logger.info("[debug111] not use ssl")
+                        logger.info("[debug111] creds - {}, {}, {}, {}, {}", creds.host, creds.port, creds.user, creds.auth, creds.password)
+                        conn = hive.connect('emr-spark-gateway-cn-hangzhou.data.aliyun.com', port=443, scheme='https',
+                                            username='dbt-test-000', password='xxx')
                     handle = PyhiveConnectionWrapper(conn)
                 elif creds.method == SparkConnectionMethod.ODBC:
                     if creds.cluster is not None:
@@ -573,10 +596,14 @@ class SparkConnectionManager(SQLConnectionManager):
                     logger.warning(msg)
                     time.sleep(creds.connect_timeout)
                 else:
+                    # pass
+                    logger.info("[debug111] print error message... " + str(e))
                     raise FailedToConnectError("failed to connect") from e
-        else:
-            raise exc  # type: ignore
+        # else:
+        #     logger.info("[debug111] raise exc")
+        #     raise exc  # type: ignore
 
+        logger.info("[debug111] force connection success")
         connection.handle = handle
         connection.state = ConnectionState.OPEN
         return connection
@@ -647,3 +674,87 @@ def _is_retryable_error(exc: Exception) -> str:
         return str(exc)
     else:
         return ""
+
+from enum import Enum
+class AppState(Enum):
+    """
+    EMR Serverless Spark Job Run States
+
+    """
+
+    SUBMITTED = "Submitted"
+    PENDING = "Pending"
+    RUNNING = "Running"
+    SUCCESS = "Success"
+    FAILED = "Failed"
+    CANCELLING = "Cancelling"
+    CANCELLED = "Cancelled"
+    CANCEL_FAILED = "CancelFailed"
+
+def ss_execute(sql, credentials):
+    import os
+    if credentials.ak is None or credentials.sk is None:
+        ak = os.environ["AK"]
+        sk = os.environ["SK"]
+    else:
+        ak = credentials.ak
+        sk = credentials.sk
+    # logger.info("[debug111] AK - {}, SK - {}", ak, sk)
+    env = "dev"
+    tags: List[Tag] = [Tag("environment", env), Tag("workflow", "true")]
+    engine_release_version = (
+        "esr-2.1-native (Spark 3.3.1, Scala 2.12, Native Runtime)"
+    )
+
+    client = Client(
+            Config(
+                access_key_id=ak,
+                access_key_secret=sk,
+                endpoint=f"emr-serverless-spark.{credentials.region}.aliyuncs.com",
+            )
+        )
+
+    spark_submit_parameters = "--class org.apache.spark.sql.hive.thriftserver.SparkSQLCLIDriver --conf spark.executor.cores=1 --conf spark.executor.memory=4g --conf spark.driver.cores=1 --conf spark.driver.memory=4g --conf spark.executor.instances=2"
+    entry_point_args = ["-e", sql]
+    job_driver_spark_submit = JobDriverSparkSubmit(
+        None, entry_point_args, spark_submit_parameters
+    )
+
+    job_driver = JobDriver(job_driver_spark_submit)
+
+    start_job_run_request = StartJobRunRequest(
+        region_id=credentials.region,
+        resource_queue_id="root_queue",
+        code_type="SQL",
+        name="dbt-sql-test",
+        release_version=engine_release_version,
+        tags=tags,
+        job_driver=job_driver,
+    )
+
+    runtime = util_models.RuntimeOptions()
+    headers = {}
+
+    try:
+        job_run_id = client.start_job_run_with_options(
+            credentials.workspace_id, start_job_run_request, headers, runtime
+        ).body.job_run_id
+
+        logger.info("job_run_id - {}", job_run_id)
+
+        state = client.get_job_run(
+            credentials.workspace_id, job_run_id, GetJobRunRequest(region_id=credentials.region)
+        ).body.job_run.state
+
+        while AppState(state) not in {AppState.SUCCESS, AppState.FAILED, AppState.CANCELLED, AppState.CANCEL_FAILED}:
+            time.sleep(10)
+            logger.info("Poll status: {}, sleeping".format(state))
+
+            state = client.get_job_run(
+                credentials.workspace_id, job_run_id, GetJobRunRequest(region_id=credentials.region)
+            ).body.job_run.state
+
+        return
+    except Exception as e:
+        logger.error(e)
+        pass

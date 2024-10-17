@@ -67,9 +67,13 @@
 
       Also, why do neither drop_relation or adapter.drop_relation work here?!
       --#}
+
+    {#--
       {% call statement('drop_relation') -%}
         drop table if exists {{ tmp_relation }}
       {%- endcall %}
+    --#}
+
     {%- endif -%}
   {%- endif -%}
 

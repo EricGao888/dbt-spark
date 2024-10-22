@@ -360,7 +360,6 @@
 {% endmacro %}
 
 {% macro spark__alter_column_comment(relation, column_dict) %}
-    {% set result = namespace(value="") %}
     {% for column_name in column_dict %}
       {% set comment = column_dict[column_name]['description'] %}
       {% set escaped_comment = comment | replace('\'', '\\\'') %}
@@ -375,10 +374,8 @@
               comment '{{ escaped_comment }}';
         {% endif %}
       {% endset %}
-      {% set result.value = result.value ~ comment_query %}
+      {% do run_query(comment_query) %}
     {% endfor %}
-    {{ log("[ss-debug] result.value " ~ result.value ~ " ", info=True) }}
-    {% do run_query(result.value) %}
 {% endmacro %}
 
 

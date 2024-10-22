@@ -1,5 +1,8 @@
 ## Alibaba Cloud EMR Serverless Spark Adapter
 
+### Hybrid Mode
+* For stability, please disable `Automatic Stop` of serverless spark thrift server.
+
 ### Installation
 
 #### From Source Code
@@ -24,8 +27,10 @@ dbt_spark_test:
   outputs:
     local:
       connect_retries: 2
+      host: emr-spark-gateway-cn-hangzhou.data.aliyun.com # serverless spark thrift host
+      user: <your-serverless-spark-thrift-user>
+      password: <your-serverless-spark-thrift-token>
       connect_timeout: 60
-      host: emr-spark-gateway-cn-hangzhou.data.aliyun.com # any non-empty string
       method: serverless_spark
       retry_all: False
       schema: order_dw
@@ -47,6 +52,7 @@ dbt_spark_test:
 
 ### Supported Features
 * Submitting jobs to **Alibaba Cloud EMR Serverless Spark**
+* Running sqls in hybrid mode
 * Logging `stderr` when job fails
 * Concatenating `alter table column comments` statements in one serverless spark job
 * Generating job names from sql comments automatically

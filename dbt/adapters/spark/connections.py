@@ -165,7 +165,6 @@ class SparkCredentials(Credentials):
                     f"ImportError({e.msg})"
                 ) from e
 
-        logger.info("[ss-debug] method - {}", self.method)
         if self.method != SparkConnectionMethod.SESSION and self.method != SparkConnectionMethod.SERVERLESS_SPARK:
             self.host = self.host.rstrip("/")
 
@@ -420,14 +419,11 @@ class SparkConnectionManager(SQLConnectionManager):
         exc = None
         handle: SparkConnectionWrapper
 
-        if creds.method == SparkConnectionMethod.SERVERLESS_SPARK:
-            connection.state = ConnectionState.OPEN
-            connection.handle = ServerlessSparkConnectionWrapper(connection)
-            return connection
-
         for i in range(1 + creds.connect_retries):
             try:
-                if creds.method == SparkConnectionMethod.HTTP:
+                if creds.method == SparkConnectionMethod.SERVERLESS_SPARK:
+                    handle = ServerlessSparkConnectionWrapper(connection)
+                elif creds.method == SparkConnectionMethod.HTTP:
                     cls.validate_creds(creds, ["token", "host", "port", "cluster", "organization"])
 
                     # Prepend https:// if it is missing
@@ -679,38 +675,57 @@ class ServerlessSparkConnectionWrapper(SparkConnectionWrapper):
     def __init__(self, connection) -> None:
         self.connection = connection
         self._cursor = None
+        self._cnt = 0
 
-        credentials = connection.credentials
-        self._workspace_id = credentials.workspace_id
-        self._region = credentials.region
+        creds = connection.credentials
+        self._workspace_id = creds.workspace_id
+        self._region = creds.region
 
         import os
 
-        if credentials.ak is None or credentials.sk is None:
+        if creds.ak is None or creds.sk is None:
             ak = os.environ["AK"]
             sk = os.environ["SK"]
         else:
-            ak = credentials.ak
-            sk = credentials.sk
+            ak = creds.ak
+            sk = creds.sk
 
         self._client = Client(
             Config(
                 access_key_id=ak,
                 access_key_secret=sk,
-                endpoint=f"emr-serverless-spark.{credentials.region}.aliyuncs.com",
+                endpoint=f"emr-serverless-spark.{creds.region}.aliyuncs.com",
             )
         )
 
         self._current_job_run_id = None
 
+        serverless_spark_thrift_connection = hive.connect(
+            host=creds.host,
+            port="443",
+            username=creds.user,
+            auth=None,
+            password=creds.password,
+            scheme="https",
+            configuration=creds.server_side_parameters,
+        )  # noqa
+
+        self._interactive = PyhiveConnectionWrapper(serverless_spark_thrift_connection)
+
     def cursor(self) -> "ServerlessSparkConnectionWrapper":
+        self._interactive._cursor = self._interactive.handle.cursor()
         return self
 
     def cancel(self) -> None:
+        try:
+            self._interactive.cancel()
+        except Exception as e:
+            pass
+
         if self._current_job_run_id == None:
-            logger.info("No job running, no need to cancel.")
+            logger.debug("No job running, no need to cancel.")
         else:
-            logger.info("Canceling job run - %s", self._current_job_run_id)
+            logger.debug("Canceling job run - %s", self._current_job_run_id)
             try:
                 self._client.cancel_job_run(
                     self._workspace_id, self._current_job_run_id, CancelJobRunRequest(region_id=self._region)
@@ -722,21 +737,38 @@ class ServerlessSparkConnectionWrapper(SparkConnectionWrapper):
 
     def close(self) -> None:
         # Currently serverless spark sdk client does not support close
-        logger.debug("NotImplemented: close")
+        try:
+            self._interactive.close()
+        except Exception as e:
+            pass
 
     def rollback(self, *args: Any, **kwargs: Any) -> None:
         logger.debug("NotImplemented: rollback")
 
     def fetchall(self) -> List["pyodbc.Row"]:
-        logger.debug("NotImplemented: fetchall")
-        return []
+        result = self._interactive.fetchall()
+        logger.debug("[ss-debug] fetchall result - {}", str([row[0] for row in result]))
+        # logger.debug("[ss-debug] fetchall result - {}", str(result))
+        return result
+        #
+        # try:
+        #     result = self._interactive.fetchall()
+        #     logger.debug("[ss-debug] fetchall result - {}", str(result))
+        #     return result
+        # except Exception as e:
+        #     logger.debug("[ss-debug] interactive result not available", e)
+        #     return []
 
     def execute(self, sql: str, bindings: Optional[List[Any]] = None) -> None:
-        logger.info("[ss-debug] sql - {}", sql)
-        logger.info("[ss-debug] submit sql to ss...")
-        logger.info("[ss-debug] bindings - {}", bindings)
+        if self._use_interactive_runner(sql):
+            self._interactive.execute(sql, bindings)
+            return
+
+        logger.debug("[ss-debug] sql - {}", sql)
+        logger.debug("[ss-debug] submit sql to ss...")
+        logger.debug("[ss-debug] bindings - {}", bindings)
         credentials = self.connection.credentials
-        # logger.info("[ss-debug] spark-confs - {}", credentials.server_side_parameters)
+        # logger.debug("[ss-debug] spark-confs - {}", credentials.server_side_parameters)
 
         env = "dev"
         tags: List[Tag] = [Tag("environment", env), Tag("workflow", "true")]
@@ -748,7 +780,7 @@ class ServerlessSparkConnectionWrapper(SparkConnectionWrapper):
         for key, value in credentials.server_side_parameters.items():
             spark_confs += f" --conf {key}={value}"
         spark_submit_parameters = f"--class org.apache.spark.sql.hive.thriftserver.SparkSQLCLIDriver {spark_confs}"
-        logger.info("[ss-debug] spark_submit_parameters - {}", spark_submit_parameters)
+        logger.debug("[ss-debug] spark_submit_parameters - {}", spark_submit_parameters)
         entry_point_args = ["-e", sql]
         job_driver_spark_submit = JobDriverSparkSubmit(
             None, entry_point_args, spark_submit_parameters
@@ -774,7 +806,7 @@ class ServerlessSparkConnectionWrapper(SparkConnectionWrapper):
                 credentials.workspace_id, start_job_run_request, headers, runtime
             ).body.job_run_id
 
-            logger.info("job_run_id - {}", job_run_id)
+            logger.debug("job_run_id - {}", job_run_id)
 
             state = self._client.get_job_run(
                 credentials.workspace_id, job_run_id, GetJobRunRequest(region_id=credentials.region)
@@ -786,7 +818,7 @@ class ServerlessSparkConnectionWrapper(SparkConnectionWrapper):
                 ServerlessSparkConnectionWrapper.AppState.CANCELLED,
                 ServerlessSparkConnectionWrapper.AppState.CANCEL_FAILED}:
                 time.sleep(10)
-                logger.info("Poll status: {}, sleeping".format(state))
+                logger.debug("Poll status: {}, sleeping".format(state))
 
                 state = self._client.get_job_run(
                     credentials.workspace_id, job_run_id, GetJobRunRequest(region_id=credentials.region)
@@ -797,12 +829,11 @@ class ServerlessSparkConnectionWrapper(SparkConnectionWrapper):
                     credentials.workspace_id, job_run_id, GetJobRunRequest(region_id=credentials.region)
                 ).body.job_run.state_change_reason.message)
             else:
-                logger.info("Job run finished with state - {}", state)
+                logger.debug("Job run finished with state - {}", state)
 
         except Exception as e:
-            # TODO: currently job will continue even if pre-task failed
-            # raise DbtDatabaseError(str(e))
             logger.error("Failed to submit job!", e)
+            raise DbtDatabaseError(str(e))
 
         return
 
@@ -823,9 +854,10 @@ class ServerlessSparkConnectionWrapper(SparkConnectionWrapper):
     ) -> Sequence[
         Tuple[str, Any, Optional[int], Optional[int], Optional[int], Optional[int], bool]
     ]:
-        return []
-        # assert self._cursor, "Cursor not available"
-        # return self._cursor.description
+        try:
+            return self._interactive._cursor.description
+        except Exception as e:
+            return []
 
     def _generate_serverless_spark_job_name(self, sql):
         import re
@@ -849,6 +881,15 @@ class ServerlessSparkConnectionWrapper(SparkConnectionWrapper):
         except Exception as e:
             logger.error("Failed to generate spark job name!", e)
 
-        logger.info("Generated spark job name - {}", name)
+        logger.debug("Generated spark job name - {}", name)
 
         return name
+
+    def _use_interactive_runner(self, sql):
+        interactive_keywords = ["drop table if exists",
+                                "alter table",
+                                "show table extended",
+                                "create schema if not exists",
+                                "show databases",
+                                "clear cache"]
+        return any(keyword in sql.lower() for keyword in interactive_keywords)

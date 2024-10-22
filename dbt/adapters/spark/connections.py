@@ -480,6 +480,7 @@ class SparkConnectionManager(SQLConnectionManager):
                             kerberos_service_name=creds.kerberos_service_name,
                             password=creds.password,
                             configuration=creds.server_side_parameters,
+                            scheme='https'
                         )  # noqa
                     handle = PyhiveConnectionWrapper(conn)
                 elif creds.method == SparkConnectionMethod.ODBC:

@@ -748,7 +748,7 @@ class ServerlessSparkConnectionWrapper(SparkConnectionWrapper):
         for key, value in credentials.server_side_parameters.items():
             spark_confs += f" --conf {key}={value}"
         spark_submit_parameters = f"--class org.apache.spark.sql.hive.thriftserver.SparkSQLCLIDriver {spark_confs}"
-        logger.info("[ss-debugger] spark_submit_parameters - {}", spark_submit_parameters)
+        logger.info("[ss-debug] spark_submit_parameters - {}", spark_submit_parameters)
         entry_point_args = ["-e", sql]
         job_driver_spark_submit = JobDriverSparkSubmit(
             None, entry_point_args, spark_submit_parameters
@@ -795,7 +795,7 @@ class ServerlessSparkConnectionWrapper(SparkConnectionWrapper):
             if ServerlessSparkConnectionWrapper.AppState(state) == ServerlessSparkConnectionWrapper.AppState.FAILED:
                 logger.error("Job run failed with stderr - {}", self._client.get_job_run(
                     credentials.workspace_id, job_run_id, GetJobRunRequest(region_id=credentials.region)
-                ).body.job_run.state_change_reason)
+                ).body.job_run.state_change_reason.message)
             else:
                 logger.info("Job run finished with state - {}", state)
 

@@ -821,14 +821,19 @@ class ServerlessSparkConnectionWrapper(SparkConnectionWrapper):
                 time.sleep(10)
                 logger.debug("Poll status: {}, sleeping".format(state))
 
-                state = self._client.get_job_run(
+                response = self._client.get_job_run(
                     credentials.workspace_id, job_run_id, GetJobRunRequest(region_id=credentials.region)
-                ).body.job_run.state
+                )
+                state = response.body.job_run.state
 
             if ServerlessSparkConnectionWrapper.AppState(state) == ServerlessSparkConnectionWrapper.AppState.FAILED:
-                logger.error("Job run failed with stderr - {}", self._client.get_job_run(
-                    credentials.workspace_id, job_run_id, GetJobRunRequest(region_id=credentials.region)
-                ).body.job_run.state_change_reason.message)
+                logger.error("Job run failed with stderr - {}", response.body.job_run.state_change_reason.message)
+                raise DbtDatabaseError(f"Job run failed with stderr - {response.body.job_run.state_change_reason.message}")
+            elif ServerlessSparkConnectionWrapper.AppState(state) in (ServerlessSparkConnectionWrapper.AppState.CANCELLED,
+                                                                      ServerlessSparkConnectionWrapper.AppState.CANCELLING,
+                                                                      ServerlessSparkConnectionWrapper.AppState.CANCEL_FAILED):
+                logger.debug("Job run with state - {}", response.body.job_run.state)
+                raise DbtDatabaseError(f"Job run failed with state - {response.body.job_run.state}")
             else:
                 logger.debug("Job run finished with state - {}", state)
 

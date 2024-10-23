@@ -889,6 +889,7 @@ class ServerlessSparkConnectionWrapper(SparkConnectionWrapper):
         interactive_keywords = ["drop table if exists",
                                 "alter table",
                                 "show table extended",
+                                "describe extended",
                                 "create schema if not exists",
                                 "show databases",
                                 "clear cache"]

@@ -808,10 +808,11 @@ class ServerlessSparkConnectionWrapper(SparkConnectionWrapper):
 
             logger.debug("job_run_id - {}", job_run_id)
 
-            state = self._client.get_job_run(
+            response = self._client.get_job_run(
                 credentials.workspace_id, job_run_id, GetJobRunRequest(region_id=credentials.region)
-            ).body.job_run.state
-
+            )
+            state = response.body.job_run.state
+            self._current_job_run_id = response.body.job_run.job_run_id
             while ServerlessSparkConnectionWrapper.AppState(state) not in {
                 ServerlessSparkConnectionWrapper.AppState.SUCCESS,
                 ServerlessSparkConnectionWrapper.AppState.FAILED,

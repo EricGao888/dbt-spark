@@ -48,7 +48,7 @@ import time
 
 from alibabacloud_emr_serverless_spark20230808.client import Client
 from alibabacloud_emr_serverless_spark20230808.models import Tag, JobDriverSparkSubmit, JobDriver, StartJobRunRequest, \
-    GetJobRunRequest, CancelJobRunRequest
+    GetJobRunRequest, CancelJobRunRequest, ListLogContentsRequest
 from alibabacloud_tea_openapi.models import Config
 from alibabacloud_tea_util import models as util_models
 
@@ -711,6 +711,7 @@ class ServerlessSparkConnectionWrapper(SparkConnectionWrapper):
         )  # noqa
 
         self._interactive = PyhiveConnectionWrapper(serverless_spark_thrift_connection)
+        self._is_interactive = True
 
     def cursor(self) -> "ServerlessSparkConnectionWrapper":
         self._interactive._cursor = self._interactive.handle.cursor()
@@ -746,23 +747,33 @@ class ServerlessSparkConnectionWrapper(SparkConnectionWrapper):
         logger.debug("NotImplemented: rollback")
 
     def fetchall(self) -> List["pyodbc.Row"]:
-        result = self._interactive.fetchall()
-        logger.debug("[ss-debug] fetchall result - {}", str([row[0] for row in result]))
-        # logger.debug("[ss-debug] fetchall result - {}", str(result))
+        if self._is_interactive:
+            result = self._interactive.fetchall()
+        else:
+            workspace_id = self.connection.credentials.workspace_id
+            region_id = self.connection.credentials.region
+            get_job_run_response = self._client.get_job_run(
+                workspace_id, self._current_job_run_id, GetJobRunRequest(region_id=region_id)
+            )
+            time.sleep(10)
+            file_name = get_job_run_response.body.job_run.log.driver_std_out
+            list_log_content_response = self._client.list_log_contents(workspace_id, ListLogContentsRequest(file_name, 9999, 0, region_id))
+            raw_result = list_log_content_response.body.list_log_content.contents[0].line_content
+            lines = raw_result.split('\n')
+            result = [line.split('\t') for line in lines if line]
+            result[0][0] = int(result[0][0])
+            result[0][1] = True if result[0][1].lower() == "true" else False
+            result[0][2] = True if result[0][2].lower() == "true" else False
+
+        logger.debug("[ss-debug] fetchall result - {}", result)
         return result
-        #
-        # try:
-        #     result = self._interactive.fetchall()
-        #     logger.debug("[ss-debug] fetchall result - {}", str(result))
-        #     return result
-        # except Exception as e:
-        #     logger.debug("[ss-debug] interactive result not available", e)
-        #     return []
 
     def execute(self, sql: str, bindings: Optional[List[Any]] = None) -> None:
         if self._use_interactive_runner(sql):
             self._interactive.execute(sql, bindings)
             return
+
+        self._is_interactive = False
 
         logger.debug("[ss-debug] sql - {}", sql)
         logger.debug("[ss-debug] submit sql to ss...")
@@ -861,7 +872,13 @@ class ServerlessSparkConnectionWrapper(SparkConnectionWrapper):
         Tuple[str, Any, Optional[int], Optional[int], Optional[int], Optional[int], bool]
     ]:
         try:
-            return self._interactive._cursor.description
+            if self._is_interactive:
+                result = self._interactive._cursor.description
+            else:
+                result = [('failures', 'BIGINT_TYPE', None, None, None, None, True),
+                        ('should_warn', 'BOOLEAN_TYPE', None, None, None, None, True),
+                        ('should_error', 'BOOLEAN_TYPE', None, None, None, None, True)]
+            return result
         except Exception as e:
             return []
 

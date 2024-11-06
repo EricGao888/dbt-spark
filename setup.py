@@ -70,7 +70,7 @@ setup(
         # add dbt-core to ensure backwards compatibility of installation, this is not a functional dependency
         "dbt-core>=1.8.0a1",
         "alibabacloud_tea_openapi >= 0.3.7",
-        "alibabacloud_emr_serverless_spark20230808 >= 1.0.0"
+        "alibabacloud_emr_serverless_spark20230808 >= 1.6.0"
     ],
     extras_require={
         "ODBC": odbc_extras,

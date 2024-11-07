@@ -755,7 +755,6 @@ class ServerlessSparkConnectionWrapper(SparkConnectionWrapper):
             get_job_run_response = self._client.get_job_run(
                 workspace_id, self._current_job_run_id, GetJobRunRequest(region_id=region_id)
             )
-            time.sleep(10)
             file_name = get_job_run_response.body.job_run.log.driver_std_out
             list_log_content_response = self._client.list_log_contents(workspace_id, ListLogContentsRequest(file_name, 9999, 0, region_id))
             raw_result = list_log_content_response.body.list_log_content.contents[0].line_content
@@ -770,6 +769,7 @@ class ServerlessSparkConnectionWrapper(SparkConnectionWrapper):
 
     def execute(self, sql: str, bindings: Optional[List[Any]] = None) -> None:
         if self._use_interactive_runner(sql):
+            self._is_interactive = True
             self._interactive.execute(sql, bindings)
             return
 

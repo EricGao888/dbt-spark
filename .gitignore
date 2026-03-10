@@ -44,3 +44,9 @@ test.env
 .hive-metastore/
 .spark-warehouse/
 dbt-integration-tests
+
+# AI assistant config
+.aone_copilot/
+
+ss-config
+examples

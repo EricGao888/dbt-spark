@@ -73,6 +73,7 @@ class SparkCredentials(Credentials):
     connect_retries: int = 0
     connect_timeout: int = 10
     use_ssl: bool = False
+    scheme: Optional[str] = None
     server_side_parameters: Dict[str, Any] = field(default_factory=dict)
     retry_all: bool = False
 
@@ -388,6 +389,7 @@ class SparkConnectionManager(SQLConnectionManager):
                             auth=creds.auth,
                             kerberos_service_name=creds.kerberos_service_name,
                             password=creds.password,
+                            scheme=creds.scheme,
                         )  # noqa
                     handle = PyhiveConnectionWrapper(conn)
                 elif creds.method == SparkConnectionMethod.ODBC:
